@@ -772,7 +772,7 @@ class TorchForecastingModel(GlobalForecastingModel, ABC):
         predictions = self.predict(n, series)
         series_input = series[-self.input_chunk_length:]
 
-        explained = explainer.explain_input(foreground_series=series_input, display=True, **kwargs)
+        explained = explainer.explain_from_input(foreground_series=series_input, display=True, **kwargs)
         
         return (predictions, explained)
 

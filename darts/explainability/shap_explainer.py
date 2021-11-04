@@ -5,8 +5,11 @@ Shap wrapper Class
 TODO
 """
 
+#from darts.models.torch_forecasting_model import TorchForecastingModel
 from .explainability import ForecastingModelExplainer
 from darts.models.forecasting_model import ForecastingModel
+#from ..models.torch_forecasting_model import TorchForecastingModel
+from .. import models
 from typing import Optional, Tuple, Union, Any, Callable, Dict, List, Sequence
 from itertools import product
 from abc import ABC, abstractmethod
@@ -38,7 +41,7 @@ class ShapExplainer(ForecastingModelExplainer):
         The idea is to get the shap values for each past time step of a given sample for a given
         timeserie prediction. past_steps_explained gives the past horizon we want to explain.
 
-        For now only univariate time series has been implemented.
+        TODO For now only univariate time series has been implemented.
 
         Warning
 
@@ -64,7 +67,7 @@ class ShapExplainer(ForecastingModelExplainer):
                 * In general we want to keep the training_series of the model and this is the default one,
                 but in case of multiple time series training (global or meta learning) we don't save them. 
                 In this case we have to input a background_series.
-                * We might want to compare to a reduced background distribution for computing time sake.
+                * We might want to compare to a reduced background distribution for computing-time sake.
         """
         super().__init__(model, past_steps_explained)
 
@@ -75,25 +78,35 @@ class ShapExplainer(ForecastingModelExplainer):
                 "no training series has been saved by the model.")
             background_series = self.model.training_series
 
+        self.background_series = background_series
         # for the time serie, the expected return of the model is the mean of the time series itself
-        self.expected_value = background_series.mean()
+        self.expected_value = self.background_series.mean()
 
-        if past_steps_explained > len(self.model.training_series)+1:
+        if past_steps_explained > len(self.background_series)+1:
             raise_log(
                 ValueError('The length of the timeseries must be at least past_step_explained+1'),
                 logger
                 )
 
         # Generate the Input dataset which will be used as a base distribution (background) to be
-        # compared to the sample we want to explain (foreground)
+        # compared to the sample we want to explain (foreground). Format of shap input.
         self.X = create_shap_X(slicing(background_series, self.past_steps_explained+1))
         
         self.n = n
 
+        # Test type of model
+        if isinstance(self.model, models.torch_forecasting_model.TorchForecastingModel):
+            print('test')
+            self.shap_function = shap.DeepExplainer
+        else:
+            self.shap_function = shap.KernelExplainer
+        print(self.shap_function)
+
         # The explainers is a list of explainers for each of the n predictions we are interested in.
         self.explainers = [shap.KernelExplainer(self.predict_wrapper_shap(i), self.X) for i in range(n)]
 
-    def explain_timestamp(self, 
+
+    def explain_at_timestamp(self, 
                           timestamp: Union[pd.Timestamp, int],
                           display: bool = False,
                           **kwargs) -> List:
@@ -106,14 +119,34 @@ class ShapExplainer(ForecastingModelExplainer):
         3 shap values for each past timestep. 
 
         """
-        shap_values = [self.explainers[i].shap_values(self.X.loc[timestamp+i], **kwargs) for i in range(self.n)]
+
+        # if timestamp.freq != self.background_series.freq:
+        #     timestamp.freq = self.background_series.freq
+    
+        if not timestamp in self.background_series.time_index:
+            raise_log(
+                ValueError('The timestamp has not been found.'),
+                logger
+                )
+
+        if isinstance(timestamp, str):
+            timestamp = pd.Timestamp(timestamp)
+
+        # if isinstance(timestamp, int):
+        #     increments = [i for i in range(self.n)]
+        # else:
+        #     print(self.background_series.freq)
+        #     increments = [pd.Timedelta(value=i, unit=self.background_series.freq.freqstr) for i in range(self.n)]
+        #     print(increments)
+
+        shap_values = [self.explainers[i].shap_values(self.X.loc[timestamp], **kwargs) for i in range(self.n)]
 
         if display:
-            self.display_shap_values_timestamp(shap_values, timestamp)
+            self.display_timestamp_shap_values(shap_values, timestamp)
 
         return shap_values
 
-    def explain_input(self, 
+    def explain_from_input(self, 
                     foreground_series: TimeSeries,
                     display:bool = False,
                     **kwargs) -> List:
@@ -144,12 +177,20 @@ class ShapExplainer(ForecastingModelExplainer):
     def display_timestamp_shap_values(self, shap_values, timestamp):
         
         shap.initjs()
+
+        if isinstance(timestamp, str):
+            timestamp = pd.Timestamp(timestamp)
+
         for i in range(len(self.explainers)):
-            df_tmp = self.X.rename(columns={c: "x_" + str(timestamp-self.past_steps_explained+j)  for j, c in enumerate(self.X.columns)})
-            print(f'Current timestamp Shown: x_{timestamp+i}')
+            if isinstance(timestamp, pd.Timestamp):
+                timestamp_i = timestamp+pd.Timedelta(value=i, unit=self.background_series.freq.freqstr)
+            else:
+                timestamp_i = timestamp+i
+            df_tmp = self.X.rename(columns={c: "x_" + str(-self.past_steps_explained+j-1)  for j, c in enumerate(self.X.columns)})
+            print(f'Current timestamp Shown x_{i} : {timestamp_i}')
             display(shap.force_plot(base_value = self.expected_value[0],
                 shap_values = shap_values[i],
-                features = df_tmp.loc[timestamp+i]
+                features = df_tmp.loc[timestamp_i]
                 )
             )
 
@@ -168,6 +209,12 @@ class ShapExplainer(ForecastingModelExplainer):
     def predict_wrapper_shap(self, idx):
         """
         Creates a wraper for the right function to be used to predict in shap algorithm
+
+        Parameters
+        ----------
+        idx
+        index representing which prediction we compute, (between 0 and n).
+
         """
         def _f(X: np.ndarray) -> np.ndarray:
             o = np.zeros(X.shape[0])

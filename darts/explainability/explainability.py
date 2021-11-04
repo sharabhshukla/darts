@@ -36,7 +36,7 @@ class ForecastingModelExplainer(ABC):
         if not model.training_series == None:
             if not model.training_series.is_univariate:
                 raise_log(
-                    ValueError('Explainability only works for univariate timeseries for now. Stay tuned.'),
+                    ValueError('Explainability only works for univariate timeseries for now.'),
                     logger
                     )
 
@@ -51,7 +51,7 @@ class ForecastingModelExplainer(ABC):
         self.past_steps_explained = past_steps_explained
 
     @abstractmethod
-    def explain_timestamp(self, timestamp: Union[pd.Timestamp, int]) -> object:
+    def explain_at_timestamp(self, timestamp: Union[pd.Timestamp, int]) -> object:
         """
         For a given timestamp in the past, give the contribution of the past_steps_explained previous 
         elements of the timeseries
@@ -60,7 +60,7 @@ class ForecastingModelExplainer(ABC):
         pass
 
     @abstractmethod
-    def explain_input(self, series: TimeSeries) -> object:
+    def explain_from_input(self, series: TimeSeries) -> object:
         """
         For a given timeseries input, give the contribution of the past_steps_explained previous 
         elements of the timeseries
