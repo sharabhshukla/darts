@@ -125,20 +125,20 @@ on bringing more models and features.
 
 Model | Univariate | Multivariate | Probabilistic | Multiple-series training | Past-observed covariates support | Future-known covariates support | Reference
 --- | --- | --- | --- | --- | --- | --- | ---
-`ARIMA` | x | | x | | | |
-`VARIMA` | x | x | | | | |
-`AutoARIMA` | x | | | | | |
-`ExponentialSmoothing` | x | | x | | | |
-`Theta` and `FourTheta` | x | | | | | | [Theta](https://robjhyndman.com/papers/Theta.pdf) & [4 Theta](https://github.com/Mcompetitions/M4-methods/blob/master/4Theta%20method.R)
-`Prophet` | x | | | | | | [Prophet repo](https://github.com/facebook/prophet)
-`FFT` (Fast Fourier Transform) | x | | | | | |
-`RegressionModel` (incl `RandomForest`, `LinearRegressionModel` and `LightGBMModel`) | x | x | | x | x | x |
-`RNNModel` (incl. LSTM and GRU); equivalent to DeepAR in its probabilistic version | x | x | x | x | | x | [DeepAR paper](https://arxiv.org/abs/1704.04110)
-`BlockRNNModel` (incl. LSTM and GRU) | x | x | | x | x | |
-`NBEATSModel` | x | x | | x | x | | [N-BEATS paper](https://arxiv.org/abs/1905.10437)
-`TCNModel` | x | x | x | x | x | | [TCN paper](https://arxiv.org/abs/1803.01271), [DeepTCN paper](https://arxiv.org/abs/1906.04397), [blog post](https://medium.com/unit8-machine-learning-publication/temporal-convolutional-networks-and-forecasting-5ce1b6e97ce4)
-`TransformerModel` | x | x | | x | x | | 
-Naive Baselines | x | | | | | |
+`ARIMA` | ✅ | | ✅ | | | ✅ |
+`VARIMA` | ✅ | ✅ | | | | ✅ |
+`AutoARIMA` | ✅ | | | | | ✅ |
+`ExponentialSmoothing` | ✅ | | ✅ | | | |
+`Theta` and `FourTheta` | ✅ | | | | | | [Theta](https://robjhyndman.com/papers/Theta.pdf) & [4 Theta](https://github.com/Mcompetitions/M4-methods/blob/master/4Theta%20method.R)
+`Prophet` | ✅ | | ✅ | | | ✅ | [Prophet repo](https://github.com/facebook/prophet)
+`FFT` (Fast Fourier Transform) | ✅ | | | | | |
+`RegressionModel` (incl `RandomForest`, `LinearRegressionModel` and `LightGBMModel`) | ✅ | ✅ | | ✅ | ✅ | ✅ |
+`RNNModel` (incl. LSTM and GRU); equivalent to DeepAR in its probabilistic version | ✅ | ✅ | ✅ | ✅ | | ✅ | [DeepAR paper](https://arxiv.org/abs/1704.04110)
+`BlockRNNModel` (incl. LSTM and GRU) | ✅ | ✅ | ✅ | ✅ | ✅ | |
+`NBEATSModel` | ✅ | ✅ | | ✅ | ✅ | | [N-BEATS paper](https://arxiv.org/abs/1905.10437)
+`TCNModel` | ✅ | ✅ | ✅ | ✅ | ✅ | | [TCN paper](https://arxiv.org/abs/1803.01271), [DeepTCN paper](https://arxiv.org/abs/1906.04397), [blog post](https://medium.com/unit8-machine-learning-publication/temporal-convolutional-networks-and-forecasting-5ce1b6e97ce4)
+`TransformerModel` | ✅ | ✅ | ✅ | ✅ | ✅ | | 
+Naive Baselines | ✅ | | | | | |
 
 
 ## Community & Contact
@@ -167,8 +167,8 @@ Some of the models depend on `prophet` and `torch`, which have non-Python depend
 A Conda environment is thus recommended because it will handle all of those in one go.
 
 ### From conda-forge
-Currently only Linux and macOS on the x86_64 architecture with Python 3.7 or 3.8 
-are fully supported with conda; consider using PyPI if you are running into troubles.
+Currently only the x86_64 architecture with Python 3.7-3.9
+is fully supported with conda; consider using PyPI if you are running into troubles.
 
 To create a conda environment for Python 3.7
 (after installing [conda](https://docs.conda.io/en/latest/miniconda.html)):
@@ -181,9 +181,11 @@ Don't forget to activate your virtual environment
 
 As some models have relatively heavy dependencies, we provide two conda-forge packages:
 
-* Install darts with all available models (recommended): `conda install -c conda-forge u8darts-all`.
-* Install core + neural networks (PyTorch): `conda install -c conda-forge u8darts-torch`
+* Install darts with all available models (recommended): `conda install -c conda-forge -c pytorch u8darts-all`.
+* Install core + neural networks (PyTorch): `conda install -c conda-forge -c pytorch u8darts-torch`
 * Install core only (without neural networks, Prophet or AutoARIMA): `conda install -c conda-forge u8darts`
+
+For GPU support, please follow the instructions to install CUDA in the [PyTorch installation guide](https://pytorch.org/get-started/locally/).
 
 
 ### From PyPI
@@ -197,9 +199,9 @@ As some models have relatively heavy (or non-Python) dependencies,
 we also maintain the `u8darts` package, which provides the following alternate lighter install options:
 
 * Install core only (without neural networks, Prophet or AutoARIMA): `pip install u8darts`
-* Install core + neural networks (PyTorch): `pip install 'u8darts[torch]'`
-* Install core + Facebook Prophet: `pip install 'u8darts[prophet]'`
-* Install core + AutoARIMA: `pip install 'u8darts[pmdarima]'`
+* Install core + neural networks (PyTorch): `pip install "u8darts[torch]"`
+* Install core + Facebook Prophet: `pip install "u8darts[prophet]"`
+* Install core + AutoARIMA: `pip install "u8darts[pmdarima]"`
 
 #### Enabling Support for LightGBM
 
@@ -259,3 +261,21 @@ To build documentation locally just run
 ./gradlew buildDocs
 ```
 After that docs will be available in `./docs/build/html` directory. You can just open `./docs/build/html/index.html` using your favourite browser.
+
+
+## Citation
+If you are using Darts in your scientific work, we would appreciate citations to the following paper.
+
+[Darts: User-Friendly Modern Machine Learning for Time Series](https://arxiv.org/abs/2110.03224)
+
+Bibtex entry:
+```
+@misc{herzen2021darts,
+      title={Darts: User-Friendly Modern Machine Learning for Time Series}, 
+      author={Julien Herzen and Francesco Lässig and Samuele Giuliano Piazzetta and Thomas Neuer and Léo Tafti and Guillaume Raille and Tomas Van Pottelbergh and Marek Pasieka and Andrzej Skrodzki and Nicolas Huguenin and Maxime Dumonal and Jan Kościsz and Dennis Bader and Frédérick Gusset and Mounir Benheddi and Camila Williamson and Michal Kosinski and Matej Petrik and Gaël Grosch},
+      year={2021},
+      eprint={2110.03224},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG}
+}
+```
