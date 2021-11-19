@@ -5,6 +5,7 @@ Shap wrapper Class
 TODO
 """
 
+from os import X_OK
 from .explainability import ForecastingModelExplainer
 from darts.models.forecasting.forecasting_model import ForecastingModel
 from .. import models
@@ -46,7 +47,7 @@ class ShapExplainer(ForecastingModelExplainer):
 
         This is only a shap value of direct influence and doesn't take into account relationships 
         between past values. Hence a past timestep could also have an indirect influence via the 
-        intermediate timesteps.
+        intermediate past timesteps elements of the timeseries.
 
         Parameters
         ----------
@@ -63,10 +64,10 @@ class ShapExplainer(ForecastingModelExplainer):
         background_series
             the series we want to use to compare the foreground we want to explain. This is optional,
             for 2 reasons:
-                * In general we want to keep the training_series of the model and this is the default one,
+                - In general we want to keep the training_series of the model and this is the default one,
                 but in case of multiple time series training (global or meta learning) we don't save them. 
                 In this case we have to input a background_series.
-                * We might want to compare to a reduced background distribution for computing-time sake.
+                - We might want to compare to a reduced background distribution for computing-time sake.
         """
         super().__init__(model, past_steps_explained)
 
@@ -90,7 +91,7 @@ class ShapExplainer(ForecastingModelExplainer):
         # Generate the Input dataset which will be used as a base distribution (background) to be
         # compared to the sample we want to explain (foreground). Format of shap input.
         self.X = create_shap_X(slicing(background_series, self.past_steps_explained+1))
-        
+        print(slicing(background_series, self.past_steps_explained+1))
         self.n = n
 
         self.shap_type = 'Kernel'
@@ -107,16 +108,18 @@ class ShapExplainer(ForecastingModelExplainer):
 
     def create_explainer(self,n: int, X) -> shap.KernelExplainer:
         if self.shap_type == 'Kernel':
-            return shap.KernelExplainer(self.predict_wrapper_kernel_shap(n), self.X)
+            return shap.KernelExplainer(self.predict_wrapper_kernel_shap(n), X)
         elif self.shap_type == 'Deep':
             X_ = []
-            X_np = self.X.values 
+            X_np = X.values 
+            print(X_np.shape)
             for i in range(X_np.shape[0]):
                 ts = X_np[i,:]
                 X_.append(torch.tensor(ts.reshape(1, ts.shape[0], 1)))
             
             X = torch.Tensor(X_np.shape[0], ts.shape[0], 1)
             torch.cat(X_, out=X)
+            print(X.shape)
 
         return shap.DeepExplainer(self.predict_wrapper_deep_shap(n), X)
 
@@ -270,6 +273,8 @@ def slicing(ts, slice_length) -> List:
     list_slices = []
     for idx in range(len(ts.time_index)-slice_length):
         list_slices.append(ts.slice(start_ts=ts.time_index[idx], end_ts=ts.time_index[idx+slice_length]))
+        print(ts.time_index[idx])
+        print(ts.slice(start_ts=ts.time_index[idx], end_ts=ts.time_index[idx+slice_length]))
     return list_slices
 
 def create_shap_X(slices) -> pd.DataFrame:
