@@ -5,10 +5,8 @@ Shap wrapper Class
 TODO
 """
 
-#from darts.models.torch_forecasting_model import TorchForecastingModel
 from .explainability import ForecastingModelExplainer
-from darts.models.forecasting_model import ForecastingModel
-#from ..models.torch_forecasting_model import TorchForecastingModel
+from darts.models.forecasting.forecasting_model import ForecastingModel
 from .. import models
 from typing import Optional, Tuple, Union, Any, Callable, Dict, List, Sequence
 from itertools import product
@@ -17,10 +15,11 @@ from inspect import signature
 import numpy as np
 import pandas as pd
 import shap
+import torch
 
 from ..utils import _build_tqdm_iterator
 from ..timeseries import TimeSeries
-from ..logging import get_logger, raise_log, raise_if_not, raise_if
+from darts.logging import get_logger, raise_log, raise_if_not, raise_if
 
 logger = get_logger(__name__)
 
@@ -94,17 +93,32 @@ class ShapExplainer(ForecastingModelExplainer):
         
         self.n = n
 
-        # Test type of model
-        if isinstance(self.model, models.torch_forecasting_model.TorchForecastingModel):
-            print('test')
-            self.shap_function = shap.DeepExplainer
-        else:
-            self.shap_function = shap.KernelExplainer
-        print(self.shap_function)
+        self.shap_type = 'Kernel'
+
+        # Test type of model - to choose the right shap method
+        if isinstance(self.model, models.forecasting.torch_forecasting_model.TorchForecastingModel):
+            self.shap_type = 'Deep'
+        
+        logger.info(('Shap {}Explainer will be used'.format(self.shap_type)))
+
 
         # The explainers is a list of explainers for each of the n predictions we are interested in.
-        self.explainers = [shap.KernelExplainer(self.predict_wrapper_shap(i), self.X) for i in range(n)]
+        self.explainers = [self.create_explainer(i, self.X) for i in range(n)]
 
+    def create_explainer(self,n: int, X) -> shap.KernelExplainer:
+        if self.shap_type == 'Kernel':
+            return shap.KernelExplainer(self.predict_wrapper_kernel_shap(n), self.X)
+        elif self.shap_type == 'Deep':
+            X_ = []
+            X_np = self.X.values 
+            for i in range(X_np.shape[0]):
+                ts = X_np[i,:]
+                X_.append(torch.tensor(ts.reshape(1, ts.shape[0], 1)))
+            
+            X = torch.Tensor(X_np.shape[0], ts.shape[0], 1)
+            torch.cat(X_, out=X)
+
+        return shap.DeepExplainer(self.predict_wrapper_deep_shap(n), X)
 
     def explain_at_timestamp(self, 
                           timestamp: Union[pd.Timestamp, int],
@@ -122,7 +136,6 @@ class ShapExplainer(ForecastingModelExplainer):
 
         # if timestamp.freq != self.background_series.freq:
         #     timestamp.freq = self.background_series.freq
-    
         if not timestamp in self.background_series.time_index:
             raise_log(
                 ValueError('The timestamp has not been found.'),
@@ -206,7 +219,7 @@ class ShapExplainer(ForecastingModelExplainer):
             )
 
     # TODO for multivariate and or covariates, one will have to map correctly
-    def predict_wrapper_shap(self, idx):
+    def predict_wrapper_kernel_shap(self, idx):
         """
         Creates a wraper for the right function to be used to predict in shap algorithm
 
@@ -226,9 +239,24 @@ class ShapExplainer(ForecastingModelExplainer):
                                     ).values()[idx][0]
             return o
         return _f
+    
+    def predict_wrapper_deep_shap(self, idx):
+        """
+        Creates a wraper for the right function to be used to predict in shap algorithm
+
+        Parameters
+        ----------
+        idx
+        index representing which prediction we compute, (between 0 and n).
+
+        """
+        device = self.model.device
+        return self.model.model.to(device)
 
 
-def slicing(ts, slice_length):
+
+
+def slicing(ts, slice_length) -> List:
     """Creates a list of sliced timeseries of length slice_length
     
     Parameters
@@ -244,8 +272,9 @@ def slicing(ts, slice_length):
         list_slices.append(ts.slice(start_ts=ts.time_index[idx], end_ts=ts.time_index[idx+slice_length]))
     return list_slices
 
-def create_shap_X(slices):
-    """ Creates the input shap needs from the univariate time series.
+def create_shap_X(slices) -> pd.DataFrame:
+    """ Creates the input shap needs from the time series. Can be numpy array or dataframe,
+    For now we chose dataframe, as we can keep track of the time index.
 
     Parameters
     ----------

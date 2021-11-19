@@ -5,8 +5,7 @@ Explainability Base Class
 TODO
 """
 
-from ..models.forecasting_model import ForecastingModel
-#from ..models.torch_forecasting_model import TorchForecastingModel
+from darts.models.forecasting.forecasting_model import ForecastingModel
 from typing import Optional, Tuple, Union, Any, Callable, Dict, List, Sequence
 from abc import ABC, abstractmethod
 import numpy as np
