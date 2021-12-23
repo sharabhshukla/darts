@@ -6,9 +6,9 @@ TODO
 """
 
 from os import X_OK
-from .explainability import ForecastingModelExplainer
+from darts.explainability.explainability import ForecastingModelExplainer
 from darts.models.forecasting.forecasting_model import ForecastingModel
-from .. import models
+from darts import models
 from typing import Optional, Tuple, Union, Any, Callable, Dict, List, Sequence
 from itertools import product
 from abc import ABC, abstractmethod
@@ -89,9 +89,9 @@ class ShapExplainer(ForecastingModelExplainer):
                 )
 
         # Generate the Input dataset which will be used as a base distribution (background) to be
-        # compared to the sample we want to explain (foreground). Format of shap input.
-        self.X = create_shap_X(slicing(background_series, self.past_steps_explained+1))
-        print(slicing(background_series, self.past_steps_explained+1))
+        # compared to the sample we want to explain (foreground). Format of shap input for KernelExplainer (DataFrame).
+        self.ts_shape_input = ts_shap_input(background_series, self.past_steps_explained)
+
         self.n = n
 
         self.shap_type = 'Kernel'
@@ -112,14 +112,14 @@ class ShapExplainer(ForecastingModelExplainer):
         elif self.shap_type == 'Deep':
             X_ = []
             X_np = X.values 
-            print(X_np.shape)
             for i in range(X_np.shape[0]):
                 ts = X_np[i,:]
                 X_.append(torch.tensor(ts.reshape(1, ts.shape[0], 1)))
             
-            X = torch.Tensor(X_np.shape[0], ts.shape[0], 1)
+            X = torch.Tensor(X_np.shape[0], ts.shape[0], 1).to(self.model.device)
             torch.cat(X_, out=X)
-            print(X.shape)
+            X = X.double()
+            print(X)
 
         return shap.DeepExplainer(self.predict_wrapper_deep_shap(n), X)
 
@@ -137,8 +137,6 @@ class ShapExplainer(ForecastingModelExplainer):
 
         """
 
-        # if timestamp.freq != self.background_series.freq:
-        #     timestamp.freq = self.background_series.freq
         if not timestamp in self.background_series.time_index:
             raise_log(
                 ValueError('The timestamp has not been found.'),
@@ -176,7 +174,7 @@ class ShapExplainer(ForecastingModelExplainer):
         series[-past_steps_explained:] (so the last 3 elements), and each elements will have 3 shap values for each past timestep. 
         """
 
-        foreground_series = pd.DataFrame(foreground_series.values().reshape(1, -1)).loc[0]
+        foreground_series = pd.DataFrame(foreground_series.values()[-self.past_steps_explained:].reshape(1, -1)).loc[0]
         shap_values = [
             self.explainers[i].shap_values(
                 foreground_series, 
@@ -202,7 +200,7 @@ class ShapExplainer(ForecastingModelExplainer):
                 timestamp_i = timestamp+pd.Timedelta(value=i, unit=self.background_series.freq.freqstr)
             else:
                 timestamp_i = timestamp+i
-            df_tmp = self.X.rename(columns={c: "x_" + str(-self.past_steps_explained+j-1)  for j, c in enumerate(self.X.columns)})
+            df_tmp = self.X.rename(columns={c: "x_" + str(-self.past_steps_explained+j)  for j, c in enumerate(self.X.columns)})
             print(f'Current timestamp Shown x_{i} : {timestamp_i}')
             display(shap.force_plot(base_value = self.expected_value[0],
                 shap_values = shap_values[i],
@@ -256,40 +254,73 @@ class ShapExplainer(ForecastingModelExplainer):
         device = self.model.device
         return self.model.model.to(device)
 
+class ts_shap_input():
+
+    def __init__(self, background_series, past_steps_explained):
+        self.X_df = create_shap_input_df(background_series, past_steps_explained)
+
+    def get_all(self, shap_type):
+
+        if shap_type == 'Kernel':
+            return self.X_df
+        elif shap_type == 'Deep':
+            return to_tensor(self.X_df).to(self.model.device)
+
+    def __get_item__(self,
+                    key: Union[pd.DatetimeIndex,
+                               pd.Int64Index,
+                               List[str],
+                               List[int],
+                               List[pd.Timestamp],
+                               str,
+                               int,
+                               pd.Timestamp,
+                               Any],
+                    shap_type):
+        
+        if isinstance(key, pd.Timestamp):
+            pass
 
 
-
-def slicing(ts, slice_length) -> List:
-    """Creates a list of sliced timeseries of length slice_length
-    
-    Parameters
-    ----------
-    ts
-        An univariate timeseries
-    slice_length
-        the length of the sliced series
-
-    """
-    list_slices = []
-    for idx in range(len(ts.time_index)-slice_length):
-        list_slices.append(ts.slice(start_ts=ts.time_index[idx], end_ts=ts.time_index[idx+slice_length]))
-        print(ts.time_index[idx])
-        print(ts.slice(start_ts=ts.time_index[idx], end_ts=ts.time_index[idx+slice_length]))
-    return list_slices
-
-def create_shap_X(slices) -> pd.DataFrame:
-    """ Creates the input shap needs from the time series. Can be numpy array or dataframe,
+def create_shap_input_df(ts,past_steps_explained
+                        ) -> pd.DataFrame:
+    """ 
+    Creates the input shap needs from the time series. Can be numpy array or dataframe,
     For now we chose dataframe, as we can keep track of the time index.
 
     Parameters
     ----------
-    A list of timeseries of length past_steps_explained+1
+    ts
+        The time series
+
+    past_steps_explained
+        The number of past steps we want to explain with shap
+
     """
+
+    list_slices = []
+
+    if isinstance(ts.time_index, pd.RangeIndex):
+        past_steps_explained+=1
+
+    for idx in range(len(ts.time_index)-past_steps_explained):
+        list_slices.append(ts[ts.time_index[idx]:ts.time_index[idx+past_steps_explained]])
+
     X = pd.DataFrame()
     
-    for sl in slices:
+    for sl in list_slices:
         X = X.append(pd.DataFrame(sl.values().reshape(1, -1), index=[sl.time_index[-1]]))
     
     return X.drop(X.columns[-1], axis=1)
 
+def to_tensor(df):
+    X_ = []
+    X_np = df.values 
+    for i in range(X_np.shape[0]):
+        ts = X_np[i,:]
+        X_.append(torch.tensor(ts.reshape(1, ts.shape[0], 1)))
+    
+    X = torch.Tensor(X_np.shape[0], ts.shape[0], 1)
+    torch.cat(X_, out=X)
+    return X.double()
 
