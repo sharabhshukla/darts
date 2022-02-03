@@ -706,5 +706,166 @@ class RegressionModel(GlobalForecastingModel):
 
         return predictions[0] if called_with_single_series else predictions
 
+    def predict_distribution(
+            self,
+            n: int,
+            series: Optional[Union[TimeSeries, Sequence[TimeSeries]]] = None,
+            past_covariates: Optional[Union[TimeSeries, Sequence[TimeSeries]]] = None,
+            future_covariates: Optional[Union[TimeSeries, Sequence[TimeSeries]]] = None,
+            num_samples: int = 1,
+            **kwargs
+    ) -> Union[TimeSeries, Sequence[TimeSeries]]:
+        """Forecasts values for `n` time steps after the end of the series.
+        Parameters
+        ----------
+        n : int
+            Forecast horizon - the number of time steps after the end of the series for which to produce predictions.
+        series : TimeSeries or list of TimeSeries, optional
+            Optionally, one or several input `TimeSeries`, representing the history of the target series whose future
+            is to be predicted. If specified, the method returns the forecasts of these series. Otherwise, the method
+            returns the forecast of the (single) training series.
+        past_covariates : TimeSeries or list of TimeSeries, optional
+            Optionally, the past-observed covariates series needed as inputs for the model.
+            They must match the covariates used for training in terms of dimension and type.
+        future_covariates : TimeSeries or list of TimeSeries, optional
+            Optionally, the future-known covariates series needed as inputs for the model.
+            They must match the covariates used for training in terms of dimension and type.
+        num_samples : int, default: 1
+            Currently this parameter is ignored for regression models.
+        **kwargs : dict, optional
+            Additional keyword arguments passed to the `predict` method of the model. Only works with
+            univariate target series.
+        """
+        super().predict(n, series, past_covariates, future_covariates, num_samples)
+        if series is None:
+            # then there must be a single TS, and that was saved in super().fit as self.training_series
+            raise_if(
+                self.training_series is None,
+                "Input series has to be provided after fitting on multiple series.",
+                )
+            series = self.training_series
+
+        if past_covariates is None and self.past_covariate_series is not None:
+            past_covariates = self.past_covariate_series
+        if future_covariates is None and self.future_covariate_series is not None:
+            future_covariates = self.future_covariate_series
+
+        called_with_single_series = False
+
+        if isinstance(series, TimeSeries):
+            called_with_single_series = True
+            series = [series]
+            past_covariates = [past_covariates] if past_covariates is not None else None
+            future_covariates = [future_covariates] if future_covariates is not None else None
+
+        # check that the input sizes match
+        series_dim = series[0].width
+        covariates_dim = 0
+        for covariates in [past_covariates, future_covariates]:
+            if covariates is not None:
+                covariates_dim += covariates[0].width
+        in_dim = series_dim + covariates_dim
+
+        raise_if_not(
+            in_dim == self.input_dim,
+            "The dimensionality of the series provided for prediction does not match the dimensionality "
+            "of the series this model has been trained on. Provided input dim = {}, "
+            "model input dim = {}".format(in_dim, self.input_dim),
+            )
+
+        # checking if there are enough future values in the future_covariates. MixedCovariatesInferenceDataset would
+        # detect the problem in any case, but the error message would be meaningless.
+
+        if future_covariates is not None:
+            for sample in range(len(series)):
+                last_req_ts = series[sample].end_time() + (max(n + self.max_lag, n)) * series[sample].freq
+                raise_if_not(
+                    future_covariates[sample].end_time() >= last_req_ts,
+                    "When forecasting future values for a horizon n and lags_future_covariates >= 0, future_covariates"
+                    "are requires to be at least `n + max_lags`, with `max_lag` being the furthest lag in the future"
+                    f"For the {sample}-th sample, last future covariate timestamp is"
+                    f"{future_covariates[sample].end_time()}, whereas it should be at least {last_req_ts}."
+                )
+
+        inference_dataset = MixedCovariatesInferenceDataset(
+            target_series=series,
+            past_covariates=past_covariates,
+            future_covariates=future_covariates,
+            n=max(n + self.max_lag, n),  # required for retrieving enough future covariates
+            input_chunk_length=max(0, -self.min_lag),
+            output_chunk_length=1
+        )
+
+        # all matrices have dimensions (n_series, time, n_components)
+        (
+            target_matrix,
+            past_covariates_matrix,
+            historic_future_covariates_matrix,
+            future_covariates_matrix,
+            future_past_covariates_matrix
+        ) = self._get_prediction_data(inference_dataset)
+
+        predictions = []
+        predictions_std = []
+
+        """
+        The columns of the prediction matrix need to have the same column order as during the training step, which is
+        as follows: lags | lag_cov_0 | lag_cov_1 | .. where each lag_cov_X is a shortcut for
+        lag_cov_X_dim_0 | lag_cov_X_dim_1 | .., that means, the lag X value of all the dimension of the covariate
+        series (when multivariate).
+        """
+        for i in range(n):
+            # building prediction matrix
+            X = []
+            if self.lags is not None:
+                target_series = target_matrix[:, self.lags]
+
+                X.append(target_series.reshape(len(series), -1))
+
+            covariates_matrices = [
+                (past_covariates_matrix, self.lags_past_covariates),
+                (historic_future_covariates_matrix, self.lags_historical_covariates),
+                (future_covariates_matrix, self.lags_future_covariates)
+            ]
+
+            for covariate_matrix, lags in covariates_matrices:
+                if lags is not None:
+                    covariates = covariate_matrix[:, lags]
+                    X.append(covariates.reshape(len(series), -1))
+
+            X = np.concatenate(X, axis=1)
+            prediction, pred_std = self.model.pred_dist(X, **kwargs).loc, self.model.pred_dist(X, **kwargs).scale
+            # reshape to (n_series, time (always 1), n_components)
+            prediction = prediction.reshape(len(series), 1, -1)
+            pred_std = pred_std.reshape(len(series), 1, -1)
+            # appending prediction to final predictions
+            predictions.append(prediction)
+            predictions_std.append(pred_std)
+
+            if i < n - 1:
+                # discard oldest target
+                if target_matrix is not None:
+                    target_matrix = target_matrix[:, 1:] if target_matrix.shape[1] > 1 else None
+                    # adding new prediction to the target series
+                    if target_matrix is None:
+                        target_matrix = np.asarray(prediction)
+                    else:
+                        target_matrix = np.concatenate([target_matrix, prediction], axis=1)
+
+                # discarding oldest covariate
+                if past_covariates_matrix is not None:
+                    past_covariates_matrix, future_past_covariates_matrix = _shift_matrices(
+                        past_covariates_matrix, future_past_covariates_matrix)
+                if historic_future_covariates_matrix is not None:
+                    historic_future_covariates_matrix, future_covariates_matrix = _shift_matrices(
+                        historic_future_covariates_matrix, future_covariates_matrix)
+
+        predictions = np.concatenate(predictions, axis=1)
+        predictions_std = np.concatenate(predictions_std, axis=1)
+        predictions = [self._build_forecast_series(row, input_tgt) for row, input_tgt in zip(predictions, series)]
+        predictions_std = [self._build_forecast_series(row, input_tgt) for row, input_tgt in zip(predictions_std, series)]
+
+        return {'mean': predictions[0], 'std': predictions_std[0]} if called_with_single_series else {'mean': predictions, 'std': predictions_std}
+
     def __str__(self):
         return self.model.__str__()
